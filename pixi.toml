@@ -1,0 +1,33 @@
+[workspace]
+name = "wamr-rust-sdk"
+channels = ["conda-forge"]
+# Keep the toolchain the same on every machine that develops this crate.
+platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
+
+[dependencies]
+# `wamr-sys`'s build script drives CMake to compile the WAMR C runtime and
+# the `wamrc` AOT compiler.
+cmake = ">=3.22"
+ninja = "*"
+just = "*"
+# `wamr-sys` builds `wamrc` against LLVM.
+llvmdev = "18.*"
+# Required by LLVM's CMake package when linking `wamrc`.
+zlib = "*"
+libxml2 = "*"
+# `libclang` (the C API, `libclang.dll` / `libclang.so`) is used by
+# `wamr-sys-bindgen` to regenerate the committed bindings.
+libclang = "18.*"
+
+[tasks]
+# The recipes are defined in `justfile`, which also wires up LLVM env vars
+# from the active pixi environment.
+build = "just build"
+check = "just check"
+check-no-std = "just check-no-std"
+test = "just test"
+test-aot = "just test-aot"
+test-all = "just test-all"
+fmt = "just fmt"
+clippy = "just clippy"
+bindings = "just bindings"

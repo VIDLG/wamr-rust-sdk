@@ -6,12 +6,13 @@
 //! an exported wasm function.
 //! get one via `Function::find_export_func()`
 
-use std::{ffi::CString, marker::PhantomData};
+use alloc::{ffi::CString, string::ToString, vec, vec::Vec};
+use core::{cmp, marker::PhantomData};
 use wamr_sys::{
     wasm_exec_env_t, wasm_func_get_param_count, wasm_func_get_result_count,
     wasm_func_get_result_types, wasm_function_inst_t, wasm_runtime_call_wasm,
     wasm_runtime_get_exception, wasm_runtime_get_exec_env_singleton,
-    wasm_runtime_get_wasi_exit_code, wasm_runtime_lookup_function,
+    wasm_runtime_get_wasi_exit_code, wasm_runtime_lookup_function, wasm_valkind_enum,
     wasm_valkind_enum_WASM_EXTERNREF, wasm_valkind_enum_WASM_F32, wasm_valkind_enum_WASM_F64,
     wasm_valkind_enum_WASM_FUNCREF, wasm_valkind_enum_WASM_I32, wasm_valkind_enum_WASM_I64,
     wasm_valkind_enum_WASM_V128,
@@ -74,7 +75,9 @@ impl<'instance> Function<'instance> {
         let mut index: usize = 0;
 
         for result_type in result_types.iter() {
-            match *result_type as u32 {
+            // `wasm_valkind_enum` is `c_int` or `c_uint` depending on the host
+            // C ABI; cast to the enum's own type so the constants always match.
+            match *result_type as wasm_valkind_enum {
                 wasm_valkind_enum_WASM_I32
                 | wasm_valkind_enum_WASM_FUNCREF
                 | wasm_valkind_enum_WASM_EXTERNREF => {
@@ -128,7 +131,7 @@ impl<'instance> Function<'instance> {
         // Maintain sufficient allocated space in the vector rather than just declaring its capacity.
         let result_count =
             unsafe { wasm_func_get_result_count(self.function, instance.get_inner_instance()) };
-        let capacity = std::cmp::max(param_count, result_count) as usize * 4;
+        let capacity = cmp::max(param_count, result_count) as usize * 4;
 
         // Populate the parameters in the sufficiently allocated argv vector
         let mut argv = Vec::with_capacity(capacity);
@@ -161,12 +164,16 @@ impl<'instance> Function<'instance> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use crate::{module::Module, runtime::Runtime, wasi_context::WasiCtxBuilder};
+    use std::{env, path::PathBuf};
+    #[cfg(feature = "wamrc")]
     use std::{
-        process::{Command, Stdio}, path::Path, path::PathBuf, env, fs,
+        fs,
+        path::Path,
+        process::{Command, Stdio},
     };
 
     #[test]
@@ -304,6 +311,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "wamrc")]
     fn test_func_in_multi_v128_return() {
         let runtime = Runtime::new().unwrap();
 
@@ -338,7 +346,8 @@ mod tests {
         };
         let base_entries = fs::read_dir(base);
         assert!(base_entries.is_ok());
-        let found = base_entries.unwrap()
+        let found = base_entries
+            .unwrap()
             .filter_map(|entry| entry.ok())
             .map(|entry| {
                 let path = entry.path();
@@ -350,8 +359,20 @@ mod tests {
                 (path, name)
             })
             .filter_map(|(path, name)| {
-                if name.starts_with("wamr-sys") && path.join("out").join("wamrcbuild").join("bin").join("wamrc").exists() {
-                    Some(path.join("out").join("wamrcbuild").join("bin").join("wamrc"))
+                if name.starts_with("wamr-sys")
+                    && path
+                        .join("out")
+                        .join("wamrcbuild")
+                        .join("bin")
+                        .join("wamrc")
+                        .exists()
+                {
+                    Some(
+                        path.join("out")
+                            .join("wamrcbuild")
+                            .join("bin")
+                            .join("wamrc"),
+                    )
                 } else {
                     None
                 }
@@ -365,7 +386,7 @@ mod tests {
             .arg("-o")
             .arg(aot_dest.clone())
             .arg(wasm_src.clone())
-            .stderr(Stdio::piped())  
+            .stderr(Stdio::piped())
             .stdout(Stdio::piped())
             .output()
             .unwrap();
@@ -385,7 +406,7 @@ mod tests {
 
         let wrapped_result = function.call(instance, &vec![]);
         let unwrapped_result = wrapped_result.unwrap();
-        
+
         assert_eq!(unwrapped_result.len(), 12);
         assert_eq!(
             unwrapped_result,

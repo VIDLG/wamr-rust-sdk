@@ -7,7 +7,8 @@
 //! Every process should have only one instance of this runtime by call
 //! `Runtime::new()` or `Runtime::builder().build()` once.
 
-use std::ffi::c_void;
+use alloc::vec::Vec;
+use core::ffi::c_void;
 
 use wamr_sys::{
     mem_alloc_type_t_Alloc_With_Pool, mem_alloc_type_t_Alloc_With_System_Allocator,
@@ -21,6 +22,8 @@ use crate::{host_function::HostFunctionList, RuntimeError};
 #[derive(Debug)]
 pub struct Runtime {
     host_functions: HostFunctionList,
+    // Keeps the memory pool buffer alive for as long as the runtime uses it.
+    memory_pool: Option<Vec<u8>>,
 }
 
 impl Runtime {
@@ -44,6 +47,7 @@ impl Runtime {
         match unsafe { wasm_runtime_init() } {
             true => Ok(Runtime {
                 host_functions: HostFunctionList::new("empty"),
+                memory_pool: None,
             }),
             false => Err(RuntimeError::InitializationFailure),
         }
@@ -63,6 +67,7 @@ impl Drop for Runtime {
 pub struct RuntimeBuilder {
     args: RuntimeInitArgs,
     host_functions: HostFunctionList,
+    memory_pool: Option<Vec<u8>>,
 }
 
 /// Can't build() until config allocator mode
@@ -72,6 +77,7 @@ impl Default for RuntimeBuilder {
         RuntimeBuilder {
             args,
             host_functions: HostFunctionList::new("host"),
+            memory_pool: None,
         }
     }
 }
@@ -90,6 +96,9 @@ impl RuntimeBuilder {
         self.args.mem_alloc_type = mem_alloc_type_t_Alloc_With_Pool;
         self.args.mem_alloc_option.pool.heap_buf = pool.as_mut_ptr() as *mut c_void;
         self.args.mem_alloc_option.pool.heap_size = pool.len() as u32;
+        // The builder, and later the runtime, keeps the buffer alive. Moving the
+        // `Vec` does not move its heap allocation, so `heap_buf` stays valid.
+        self.memory_pool = Some(pool);
         self
     }
 
@@ -136,13 +145,14 @@ impl RuntimeBuilder {
         } {
             true => Ok(Runtime {
                 host_functions: self.host_functions,
+                memory_pool: self.memory_pool,
             }),
             false => Err(RuntimeError::InitializationFailure),
         }
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use wamr_sys::{wasm_runtime_free, wasm_runtime_malloc};

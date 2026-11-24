@@ -16,9 +16,10 @@
 //! Plus, as an embedded of Wasm, you can provide Wasm module functionality by
 //! creating host-defined functions.
 //!
-//! WAMR Rust SDK includes a [*wamr-sys*](../crates/wamr-sys) crate. It will search for
-//! the WAMR runtime source in the path *../..*. And then uses `rust-bindgen` durning
-//! the build process to make a .so.
+//! WAMR Rust SDK includes a [*wamr-sys*](../crates/wamr-sys) crate. It searches for
+//! the WAMR runtime source in the path *../..* and compiles it with CMake. The
+//! Rust bindings are pre-generated and committed, so building does not require
+//! `bindgen` or `libclang`.
 //!
 //! This crate has similar concepts to the
 //! [WebAssembly specification](https://webassembly.github.io/spec/core/).
@@ -68,16 +69,12 @@
 //!     runtime::Runtime, module::Module, instance::Instance, function::Function,
 //!     value::WasmValue, RuntimeError
 //! };
-//! use std::path::PathBuf;
 //!
 //! fn main() -> Result<(), RuntimeError> {
 //!     let runtime = Runtime::new()?;
 //!
-//!     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-//!     d.push("resources/test");
-//!     d.push("gcd_wasm32_wasi.wasm");
-//!
-//!     let module = Module::from_file(&runtime, d.as_path())?;
+//!     let binary = include_bytes!("../resources/test/gcd_wasm32_wasi.wasm").to_vec();
+//!     let module = Module::from_vec(&runtime, binary, "gcd_wasm32_wasi.wasm")?;
 //!
 //!     let instance = Instance::new(&runtime, &module, 1024 * 64)?;
 //!
@@ -110,8 +107,7 @@
 //!     runtime::Runtime, module::Module, instance::Instance, function::Function,
 //!     value::WasmValue, RuntimeError
 //! };
-//! use std::path::PathBuf;
-//! use std::ffi::c_void;
+//! use core::ffi::c_void;
 //!
 //! extern "C" fn extra() -> i32 {
 //!     100
@@ -123,10 +119,8 @@
 //!         .register_host_function("extra", extra as *mut c_void)
 //!         .build()?;
 //!
-//!     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-//!     d.push("resources/test");
-//!     d.push("add_extra_wasm32_wasi.wasm");
-//!     let module = Module::from_file(&runtime, d.as_path())?;
+//!     let binary = include_bytes!("../resources/test/add_extra_wasm32_wasi.wasm").to_vec();
+//!     let module = Module::from_vec(&runtime, binary, "add_extra_wasm32_wasi.wasm")?;
 //!
 //!     let instance = Instance::new(&runtime, &module, 1024 * 64)?;
 //!
@@ -141,9 +135,27 @@
 //! ```
 //!
 
-use std::error;
-use std::fmt;
-use std::io;
+//! ## `no_std` support
+//!
+//! By default this crate links against `std`. To use it in a `no_std`
+//! environment (e.g. embedded targets) disable the default features:
+//!
+//! ```toml
+//! wamr-rust-sdk = { version = "1.0.0", default-features = false }
+//! ```
+//!
+//! With `std` disabled the crate only depends on `core` and `alloc`, so a
+//! global allocator is still required. File based helpers such as
+//! `Module::from_file` are not available in that configuration; use
+//! `Module::from_vec` together with your own loader instead.
+//!
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+use alloc::string::String;
+
 pub use wamr_sys as sys;
 
 pub mod function;
@@ -155,59 +167,36 @@ pub mod runtime;
 pub mod value;
 pub mod wasi_context;
 
-#[derive(Debug)]
+/// Error raised when calling a wasm function fails.
+#[derive(Debug, thiserror::Error)]
+#[error("{message} and {exit_code}")]
 pub struct ExecError {
     pub message: String,
     pub exit_code: u32,
 }
 
 /// all kinds of exceptions raised by WAMR
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
+    #[error("Not implemented")]
     NotImplemented,
     /// Runtime initialization error.
+    #[error("Runtime initialization failure")]
     InitializationFailure,
     /// file operation error. usually while loading(compilation) a .wasm
-    WasmFileFSError(std::io::Error),
+    #[cfg(feature = "std")]
+    #[error("Wasm file operation error: {0}")]
+    WasmFileFSError(#[from] std::io::Error),
     /// A compilation error. usually means that the .wasm file is invalid
+    #[error("Wasm compilation error: {0}")]
     CompilationError(String),
     /// instantiation failure
+    #[error("Wasm instantiation failure: {0}")]
     InstantiationFailure(String),
     /// Error during execute wasm functions
-    ExecutionError(ExecError),
+    #[error("Wasm execution error: {0}")]
+    ExecutionError(#[from] ExecError),
     /// usually returns by `find_export_func()`
+    #[error("Function not found")]
     FunctionNotFound,
-}
-
-impl fmt::Display for RuntimeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            RuntimeError::NotImplemented => write!(f, "Not implemented"),
-            RuntimeError::InitializationFailure => write!(f, "Runtime initialization failure"),
-            RuntimeError::WasmFileFSError(e) => write!(f, "Wasm file operation error: {}", e),
-            RuntimeError::CompilationError(e) => write!(f, "Wasm compilation error: {}", e),
-            RuntimeError::InstantiationFailure(e) => write!(f, "Wasm instantiation failure: {}", e),
-            RuntimeError::ExecutionError(info) => write!(
-                f,
-                "Wasm execution error: {} and {}",
-                info.message, info.exit_code
-            ),
-            RuntimeError::FunctionNotFound => write!(f, "Function not found"),
-        }
-    }
-}
-
-impl error::Error for RuntimeError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            RuntimeError::WasmFileFSError(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<io::Error> for RuntimeError {
-    fn from(e: io::Error) -> Self {
-        RuntimeError::WasmFileFSError(e)
-    }
 }

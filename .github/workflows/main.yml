@@ -33,6 +33,8 @@ concurrency:
 # Make sure CI fails on all warnings, including Clippy lints
 env:
   RUSTFLAGS: "-Dwarnings"
+  # Used by the `wamrc`/`llvmjit` features (installed in the step below).
+  LLVM_LIB_CFG_PATH: "/usr/lib/llvm-18/cmake/"
 
 jobs:
   # linter
@@ -106,7 +108,7 @@ jobs:
           sudo apt-get install -y llvm-18-dev libclang-18-dev libcurl4-openssl-dev libedit-dev
 
       - name: Run test cases
-        run: cargo test --lib
+        run: cargo test --lib --features wamrc
 
       - name: Run test cases sequentially
-        run: cargo test --lib -- --ignored --test-threads 1
+        run: cargo test --lib --features wamrc -- --ignored --test-threads 1

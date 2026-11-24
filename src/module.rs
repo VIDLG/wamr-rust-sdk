@@ -10,16 +10,10 @@ use crate::{
     helper::error_buf_to_string, helper::DEFAULT_ERROR_BUF_SIZE, runtime::Runtime,
     wasi_context::WasiCtx, RuntimeError,
 };
-use core::marker::PhantomData;
-use std::{
-    ffi::{c_char, CString},
-    fs::File,
-    io::Read,
-    path::Path,
-    ptr,
-    string::String,
-    vec::Vec,
-};
+use alloc::{ffi::CString, string::String, vec::Vec};
+use core::{ffi::c_char, marker::PhantomData, ptr};
+#[cfg(feature = "std")]
+use std::{fs::File, io::Read, path::Path};
 use wamr_sys::{
     wasm_module_t, wasm_runtime_load, wasm_runtime_set_module_name,
     wasm_runtime_set_wasi_addr_pool, wasm_runtime_set_wasi_args,
@@ -44,6 +38,7 @@ impl<'runtime> Module<'runtime> {
     ///
     /// If the file does not exist or the file cannot be read, an `RuntimeError::WasmFileFSError` will be returned.
     /// If the wasm file is not a valid wasm file, an `RuntimeError::CompilationError` will be returned.
+    #[cfg(feature = "std")]
     pub fn from_file(runtime: &'runtime Runtime, wasm_file: &Path) -> Result<Self, RuntimeError> {
         let name = wasm_file.file_name().unwrap().to_str().unwrap();
         let mut wasm_file = File::open(wasm_file)?;
@@ -198,7 +193,7 @@ impl Drop for Module<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use crate::{helper::cstr_to_string, runtime::Runtime, wasi_context::WasiCtxBuilder};

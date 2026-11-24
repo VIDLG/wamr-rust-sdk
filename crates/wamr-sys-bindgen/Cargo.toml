@@ -1,0 +1,13 @@
+[package]
+name = "wamr-sys-bindgen"
+description = "Regenerates crates/wamr-sys/src/bindings.rs from wasm_export.h"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+bindgen = "0.73"
+# prettyplease 0.3 depends on syn 3, which is what bindgen resolves to. Keeping
+# it explicit prevents falling back to prettyplease 0.2 (syn 2) and the
+# resulting syn version mismatch.
+prettyplease = { version = "0.3", features = ["verbatim"] }

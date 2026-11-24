@@ -5,7 +5,8 @@
 
 //! prepare wasi context
 
-use std::{ffi::c_char, ffi::CString, vec::Vec};
+use alloc::{ffi::CString, vec::Vec};
+use core::ffi::c_char;
 
 #[derive(Debug, Default)]
 struct PreOpen {
@@ -171,7 +172,7 @@ impl WasiCtx {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 

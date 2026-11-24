@@ -8,6 +8,7 @@
 
 #![allow(unused_variables)]
 
+use alloc::string::String;
 use core::{ffi::c_char, marker::PhantomData};
 
 use wamr_sys::{
@@ -106,7 +107,7 @@ impl Drop for Instance<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use crate::runtime::Runtime;

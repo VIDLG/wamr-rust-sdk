@@ -13,6 +13,7 @@ categories = ["api-bindings", "wasm"]
 keywords = ["api-bindings", "wasm", "webassembly"]
 include = [
     "/build.rs",
+    "/src/bindings.rs",
     "/src/lib.rs",
     "/wasm-micro-runtime/build-scripts",
     "/wasm-micro-runtime/CMakeLists.txt",
@@ -26,16 +27,17 @@ include = [
 [dependencies]
 
 [build-dependencies]
-bindgen = "0.73"
-cc = "1.2"
 cmake = "0.1"
 
 [features]
+aot-only = []
 custom-section = []
 dump-call-stack = []
-esp-idf = []
 hw-bound-check = []
 llvmjit = []
 multi-module = []
 name-section = [ "custom-section" ]
 std = []
+# Build the `wamrc` AOT compiler (requires LLVM). Off by default so that
+# consumers only need CMake and a C compiler.
+wamrc = []

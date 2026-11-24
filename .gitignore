@@ -1,5 +1,8 @@
 # cargo
 **/target/
 
+# pixi
+.pixi/
+
 # vscode
 *.code-workspace

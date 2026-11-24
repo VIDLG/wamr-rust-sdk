@@ -9,5 +9,6 @@
 #![allow(non_snake_case)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-// This matches bindgen::Builder output
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+// Pre-generated from `wasm_export.h` by the `wamr-sys-bindgen` crate.
+// Regenerate with `cargo run -p wamr-sys-bindgen`.
+include!("bindings.rs");

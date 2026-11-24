@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
  */
 
-extern crate bindgen;
 extern crate cmake;
 
 use cmake::Config;
-use std::{env, path::Path, path::PathBuf};
+use std::env;
+#[cfg(feature = "wamrc")]
+use std::path::Path;
+use std::path::PathBuf;
 
 const LLVM_LIBRARIES: &[&str] = &[
     // keep alphabet order
@@ -32,20 +34,6 @@ const LLVM_LIBRARIES: &[&str] = &[
     "LLVMXRay",
     "LLVMipo",
 ];
-
-fn check_is_espidf() -> bool {
-    let is_espidf = env::var("CARGO_FEATURE_ESP_IDF").is_ok()
-        && env::var("CARGO_CFG_TARGET_OS").unwrap() == "espidf";
-
-    if is_espidf
-        && (env::var("WAMR_BUILD_PLATFORM").is_ok()
-            || env::var("WAMR_SHARED_PLATFORM_CONFIG").is_ok())
-    {
-        panic!("ESP-IDF build cannot use custom platform build (WAMR_BUILD_PLATFORM) or shared platform config (WAMR_SHARED_PLATFORM_CONFIG)");
-    }
-
-    is_espidf
-}
 
 fn get_feature_flags() -> (String, String, String, String, String, String) {
     let enable_custom_section = if cfg!(feature = "custom-section") {
@@ -122,10 +110,17 @@ fn setup_config(
         disalbe_hw_bound_check,
     ) = feature_flags;
 
+    let enable_interp = if cfg!(feature = "aot-only") { "0" } else { "1" };
+
     let mut cfg = Config::new(wamr_root);
+    // WAMR uses C11 `_Alignof`/`_Static_assert`; MSVC only enables them with
+    // `/std:c11`.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        cfg.cflag("/std:c11");
+    }
     cfg.define("WAMR_BUILD_AOT", "1")
-        .define("WAMR_BUILD_INTERP", "1")
-        .define("WAMR_BUILD_FAST_INTERP", "1")
+        .define("WAMR_BUILD_INTERP", enable_interp)
+        .define("WAMR_BUILD_FAST_INTERP", enable_interp)
         .define("WAMR_BUILD_JIT", &enable_llvm_jit)
         .define("WAMR_BUILD_BULK_MEMORY", "1")
         .define("WAMR_BUILD_REF_TYPES", "1")
@@ -174,9 +169,20 @@ fn build_wamr_libraries(wamr_root: &PathBuf) {
     let dst = cfg.out_dir(vmbuild_path).build_target("vmlib").build();
 
     println!("cargo:rustc-link-search=native={}/build", dst.display());
+    // Multi-config generators (Visual Studio, Xcode) place the archive in a
+    // per-config subdirectory.
+    println!(
+        "cargo:rustc-link-search=native={}/build/Debug",
+        dst.display()
+    );
+    println!(
+        "cargo:rustc-link-search=native={}/build/Release",
+        dst.display()
+    );
     println!("cargo:rustc-link-lib=static=iwasm");
 }
 
+#[cfg(feature = "wamrc")]
 fn build_wamrc(wamr_root: &Path) {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let wamrc_build_path = out_dir.join("wamrcbuild");
@@ -184,33 +190,27 @@ fn build_wamrc(wamr_root: &Path) {
     let wamr_compiler_path = wamr_root.join("wamr-compiler");
     assert!(wamr_compiler_path.exists());
 
+    // Keep `wamrc` consistent with the runtime build. This also avoids the
+    // Zydis `FetchContent` on Windows/x86_64, which requires network access.
+    let disable_hw_bound_check = if cfg!(feature = "hw-bound-check") {
+        "0"
+    } else {
+        "1"
+    };
+
     Config::new(&wamr_compiler_path)
         .out_dir(wamrc_build_path)
         .define("WAMR_BUILD_WITH_CUSTOM_LLVM", "1")
-        .define("LLVM_DIR", env::var("LLVM_LIB_CFG_PATH").expect("LLVM_LIB_CFG_PATH isn't specified in config.toml"))
+        .define("WAMR_DISABLE_HW_BOUND_CHECK", disable_hw_bound_check)
+        .define(
+            "LLVM_DIR",
+            env::var("LLVM_LIB_CFG_PATH")
+                .expect("LLVM_LIB_CFG_PATH isn't specified in config.toml"),
+        )
         .build();
 }
 
-fn generate_bindings(wamr_root: &Path) {
-    let wamr_header = wamr_root.join("core/iwasm/include/wasm_export.h");
-    assert!(wamr_header.exists());
-
-    let bindings = bindgen::Builder::default()
-        .ctypes_prefix("::core::ffi")
-        .use_core()
-        .header(wamr_header.into_os_string().into_string().unwrap())
-        .derive_default(true)
-        .generate()
-        .expect("Unable to generate bindings");
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings
-        .write_to_file(out_path.join("bindings.rs"))
-        .expect("Couldn't write bindings");
-}
-
 fn main() {
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_ESP_IDF");
-    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-env-changed=WAMR_BUILD_PLATFORM");
     println!("cargo:rerun-if-env-changed=WAMR_SHARED_PLATFORM_CONFIG");
     println!("cargo:rerun-if-env-changed=LLVM_LIB_CFG_PATH");
@@ -220,12 +220,7 @@ fn main() {
     let wamr_root = wamr_root.join("wasm-micro-runtime");
     assert!(wamr_root.exists());
 
-    if !check_is_espidf() {
-        // because the ESP-IDF build procedure differs from the regular one
-        // (build internally by esp-idf-sys),
-        build_wamr_libraries(&wamr_root);
-        build_wamrc(&wamr_root);
-    }
-
-    generate_bindings(&wamr_root);
+    build_wamr_libraries(&wamr_root);
+    #[cfg(feature = "wamrc")]
+    build_wamrc(&wamr_root);
 }

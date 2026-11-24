@@ -4,8 +4,8 @@
  */
 
 /// This is a wrapper of a host defined(Rust) function.
-use std::ffi::{c_void, CString};
-use std::ptr;
+use alloc::{ffi::CString, vec::Vec};
+use core::{ffi::c_void, ptr};
 
 use wamr_sys::NativeSymbol;
 
@@ -62,7 +62,7 @@ pub fn pack_host_function(function_name: &CString, function_ptr: *mut c_void) ->
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use crate::{

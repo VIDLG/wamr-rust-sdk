@@ -13,9 +13,10 @@ modules, instantiate modules, call their export functions, etc.
 Plus, as an embedded of Wasm, you can provide Wasm module functionality by
 creating host-defined functions.
 
-WAMR Rust SDK includes a [*wamr-sys*](../crates/wamr-sys) crate. It will search for
-the WAMR runtime source in the path *../..*. And then uses `rust-bindgen` durning
-the build process to make a .so.
+WAMR Rust SDK includes a [*wamr-sys*](../crates/wamr-sys) crate. It searches for
+the WAMR runtime source in the path *../..* and compiles it with CMake. The
+Rust bindings are pre-generated and committed, so building does not require
+`bindgen` or `libclang`.
 
 This crate has similar concepts to the
 [WebAssembly specification](https://webassembly.github.io/spec/core/).
@@ -138,7 +139,54 @@ fn main() -> Result<(), RuntimeError> {
 }
 ```
 
+### `no_std` support
+
+The crate links against `std` by default. For embedded targets, disable the
+default features so it only depends on `core` and `alloc`:
+
+```toml
+wamr-rust-sdk = { version = "1.0.0", default-features = false }
+```
+
+A global allocator is still required, and the file based helpers such as
+`Module::from_file` are not available in this configuration. Use
+`Module::from_vec` with your own loader instead.
+
 ### Build Instructions
+
+#### Development environment with pixi
+
+`wamr-sys` compiles the WAMR C runtime with CMake and builds the `wamrc` AOT
+compiler against LLVM. A [pixi](https://pixi.sh) environment provides CMake,
+Ninja, LLVM and `just`:
+
+```sh
+pixi install
+pixi run just check         # type-check (std)
+pixi run just check-no-std  # type-check (no_std)
+pixi run just test          # run unit tests
+```
+
+Every recipe is also available as a pixi task, e.g. `pixi run check`.
+
+#### Build requirements
+
+- Always: CMake and a C compiler. The CMake build is cached under `target/`,
+  so only the first build is slow.
+- Only with the `wamrc` feature: LLVM 18, used to build the `wamrc` AOT
+  compiler. `wamrc` is never needed to *use* the SDK, only to precompile
+  `.wasm` into `.aot` (e.g. for tests).
+
+No prebuilt C library is shipped: WAMR has to be compiled against a platform
+port that matches your OS/chip (see the bare-metal section below). The Rust
+bindings in `crates/wamr-sys/src/bindings.rs` are pre-generated and committed,
+so downstream builds do **not** need `bindgen` or `libclang`.
+
+Maintainers can regenerate them (this does need `libclang`) with:
+
+```sh
+pixi run just bindings   # uses the pixi-provided libclang
+```
 
 #### Building `wamr-sys` and `wamr-rust-sdk`
 
@@ -166,11 +214,11 @@ To build the `wamr-sys` and `wamr-rust-sdk` crates, follow these steps:
 
 #### Preparing a Development and Building Environment
 
-##### For non-espidf targets
+##### Native targets
 
-1. Prepare the Rust toolchain
+1. Prepare the Rust toolchain.
 
-2. If targeting a non-linux platform, set `WAMR_BUILD_TARGET` and `WAMR_BUILD_PLATFORM` in the `.cargo/config.toml`:
+2. If targeting a non-linux platform, set `WAMR_BUILD_TARGET` and `WAMR_BUILD_PLATFORM` in `.cargo/config.toml`:
 
    ```toml
    [env]
@@ -178,26 +226,63 @@ To build the `wamr-sys` and `wamr-rust-sdk` crates, follow these steps:
    WAMR_BUILD_TARGET = "CPU architecture"
    ```
 
-3. If targeting a platform not supplied by WAMR, refer to the [WAMR porting guide](https://github.com/bytecodealliance/wasm-micro-runtime/blob/main/doc/port_wamr.md#wamr-porting-guide) and set `WAMR_BUILD_TARGET`, `WAMR_BUILD_PLATFORM` and `WAMR_SHARED_PLATFORM_CONFIG` in the `.cargo/config.toml` properly.
+3. If targeting a platform not supplied by WAMR, refer to the [WAMR porting guide](https://github.com/bytecodealliance/wasm-micro-runtime/blob/main/doc/port_wamr.md#wamr-porting-guide) and set `WAMR_BUILD_TARGET`, `WAMR_BUILD_PLATFORM` and `WAMR_SHARED_PLATFORM_CONFIG` in `.cargo/config.toml` properly.
 
-##### For espidf targets
+##### Bare-metal targets (e.g. `esp-hal`)
 
-1. Get the latest information from [The Rust on ESP Book](https://docs.esp-rs.org/book/writing-your-own-application/index.html).
-2. Please make sure you have installed all [prerequisites](https://github.com/esp-rs/esp-idf-template?tab=readme-ov-file#prerequisites) first!
-3. Generate projects from templates following the instructions in [The Rust on ESP Book](https://docs.esp-rs.org/book/writing-your-own-application/generate-project/index.html).
+This crate does not use esp-idf and does not target Xtensa. The supported
+bare-metal, `no_std` use case is the RISC-V based ESP32-C series with
+[`esp-hal`](https://github.com/esp-rs/esp-hal). Disable the default features:
 
-   ``` sh
-   $ cargo generate esp-rs/esp-idf-template cargo
-   # follow prompts from the command
-   ```
+```toml
+wamr-rust-sdk = { git = "https://github.com/bytecodealliance/wamr-rust-sdk", default-features = false }
+```
 
-4. Add the following configuration to your project's `Cargo.toml`:
+WAMR still needs a platform port for the target. Point the build at one via
+`.cargo/config.toml`:
 
-   ```toml
-   wamr-rust-sdk = { git = "https://github.com/bytecodealliance/wamr-rust-sdk", features = ["esp-idf"] }
+```toml
+[env]
+# the ESP32-C series is RISC-V
+WAMR_BUILD_TARGET = "RISCV32"
+# a custom platform implementation; see the WAMR porting guide
+WAMR_SHARED_PLATFORM_CONFIG = "path/to/platform.cmake"
+```
 
+A global allocator is required in this configuration.
+
+#### Precompiling wasm to AOT
+
+For constrained targets, ship precompiled AOT modules instead of `.wasm`.
+Build `wamrc` once and run it ahead of time:
+
+```sh
+cargo build --features wamrc
+# wamrc ends up at target/debug/build/wamr-sys-*/out/wamrcbuild/bin/wamrc
+wamrc -o app.aot app.wasm
+```
+
+Then load the bytes at runtime (e.g. read from flash) with `Module::from_vec`
+(or `Module::from_file` when `std` is enabled):
+
+```rust
+let module = Module::from_vec(&runtime, aot_bytes, "app")?;
+```
+
+The device build then needs no LLVM, and the runtime does not spend time
+compiling wasm.
+
+When you only ever load precompiled `.aot` modules, disable the interpreter to
+shrink the runtime:
+
+```toml
+wamr-rust-sdk = { git = "https://github.com/bytecodealliance/wamr-rust-sdk", default-features = false, features = ["aot-only"] }
+```
+
+With `aot-only`, loading a `.wasm` fails; only `.aot` modules are accepted.
 
 #### BKMs
 
-- [Rust on ESP-IDF "Hello, World" template](https://github.com/esp-rs/esp-idf-template?tab=readme-ov-file#rust-on-esp-idf-hello-world-template) is a good example
-- Ensure that `LIBCLANG_PATH` is correctly set (something like: */home/<user>/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-<version>/esp-clang/lib*, if on a Mac). If not, there might be something wrong with your espup installation.
+- To regenerate the bindings, `LIBCLANG_PATH` must point at the directory
+  containing libclang.
+- The `pixi` environment already provides CMake, Ninja, LLVM and `just`.
